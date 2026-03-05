@@ -1,4 +1,5 @@
 # StockBook 🛒
+<img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/0b58c543-bb91-48bb-845c-9e1994b095b1" />
 
 A Flutter grocery stock and sales management app. Track daily purchases, sales, revenue and profit — all stored locally on the device.
 
