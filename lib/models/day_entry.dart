@@ -1,3 +1,5 @@
+import 'household_expense.dart';
+
 class PurchaseItem {
   final int productId;
   final int qty;
@@ -43,9 +45,12 @@ class DayEntry {
   final bool complete;
   final double totalRevenue;
   final double totalProfit;
-  final Map<int, int> openingStock;    // productId -> qty
+  final double totalExpenses;
+  final double netProfit;
+  final Map<int, int> openingStock;
   final List<PurchaseItem> purchases;
   final List<SaleItem> sales;
+  final List<HouseholdExpense> expenses;
 
   DayEntry({
     this.id,
@@ -53,9 +58,12 @@ class DayEntry {
     this.complete = false,
     this.totalRevenue = 0,
     this.totalProfit = 0,
+    this.totalExpenses = 0,
+    this.netProfit = 0,
     this.openingStock = const {},
     this.purchases = const [],
     this.sales = const [],
+    this.expenses = const [],
   });
 
   DayEntry copyWith({
@@ -64,9 +72,12 @@ class DayEntry {
     bool? complete,
     double? totalRevenue,
     double? totalProfit,
+    double? totalExpenses,
+    double? netProfit,
     Map<int, int>? openingStock,
     List<PurchaseItem>? purchases,
     List<SaleItem>? sales,
+    List<HouseholdExpense>? expenses,
   }) {
     return DayEntry(
       id: id ?? this.id,
@@ -74,9 +85,12 @@ class DayEntry {
       complete: complete ?? this.complete,
       totalRevenue: totalRevenue ?? this.totalRevenue,
       totalProfit: totalProfit ?? this.totalProfit,
+      totalExpenses: totalExpenses ?? this.totalExpenses,
+      netProfit: netProfit ?? this.netProfit,
       openingStock: openingStock ?? this.openingStock,
       purchases: purchases ?? this.purchases,
       sales: sales ?? this.sales,
+      expenses: expenses ?? this.expenses,
     );
   }
 
@@ -90,6 +104,8 @@ class DayEntry {
         'complete': complete ? 1 : 0,
         'total_revenue': totalRevenue,
         'total_profit': totalProfit,
+        'total_expenses': totalExpenses,
+        'net_profit': netProfit,
       };
 
   factory DayEntry.fromMap(Map<String, dynamic> map) => DayEntry(
@@ -98,5 +114,7 @@ class DayEntry {
         complete: map['complete'] == 1,
         totalRevenue: map['total_revenue'] ?? 0.0,
         totalProfit: map['total_profit'] ?? 0.0,
+        totalExpenses: map['total_expenses'] ?? 0.0,
+        netProfit: map['net_profit'] ?? 0.0,
       );
 }

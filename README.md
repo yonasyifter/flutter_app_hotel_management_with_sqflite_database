@@ -89,9 +89,3 @@ lib/
 
 ---
 
-## Next Steps / Extensions
-- [ ] Cloud sync (Firebase / Supabase) for multi-device access
-- [ ] Export monthly report as CSV or PDF
-- [ ] Push notifications for low stock
-- [ ] Multiple shops / locations support
-- [ ] Barcode scanning for quick product lookup

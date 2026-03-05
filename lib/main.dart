@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'providers/app_provider.dart';
-import 'screens/home_screen.dart';
+import 'providers/language_provider.dart';
+import 'screens/login_screen.dart';
 import 'theme.dart';
 
 void main() {
@@ -15,27 +16,32 @@ class StockBookApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => AppProvider(),
-      child: MaterialApp(
-        title: 'የእቃ መዝገብ',
-        theme: AppTheme.theme,
-        debugShowCheckedModeBanner: false,
-        
-        // Add localization support for Amharic
-        localizationsDelegates: const [
-          GlobalMaterialLocalizations.delegate,
-          GlobalWidgetsLocalizations.delegate,
-          GlobalCupertinoLocalizations.delegate,
-        ],
-        supportedLocales: const [
-          Locale('am', 'ET'), // Amharic, Ethiopia
-          Locale('en', 'US'), // English, US
-        ],
-        // Set Amharic as the default locale
-        locale: const Locale('am', 'ET'),
-
-        home: const HomeScreen(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => LanguageProvider()),
+        ChangeNotifierProvider(create: (_) => AppProvider()),
+      ],
+      child: Consumer<LanguageProvider>(
+        builder: (context, lang, _) {
+          return MaterialApp(
+            title: lang.isAmharic ? 'ግሮሰሪ' : 'Grocery',
+            theme: AppTheme.theme,
+            debugShowCheckedModeBanner: false,
+            locale: lang.isAmharic
+                ? const Locale('am', 'ET')
+                : const Locale('en', 'US'),
+            supportedLocales: const [
+              Locale('am', 'ET'),
+              Locale('en', 'US'),
+            ],
+            localizationsDelegates: const [
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: const LoginScreen(),
+          );
+        },
       ),
     );
   }

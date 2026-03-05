@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../models/product.dart';
 import '../models/day_entry.dart';
+import '../models/household_expense.dart';
 import '../services/db_service.dart';
 
 class AppProvider extends ChangeNotifier {
@@ -9,11 +10,12 @@ class AppProvider extends ChangeNotifier {
   DayEntry? _currentEntry;
   DateTime _focusedMonth = DateTime.now();
 
-  // Temporary per-session state for the day flow
+  // Per-day flow state
   Map<int, int> _pendingPurchaseQty = {};
   Map<int, double> _pendingPurchasePrice = {};
   Map<int, double> _pendingSellPrice = {};
   Map<int, int> _pendingSalesQty = {};
+  List<HouseholdExpense> _pendingExpenses = [];
 
   List<Product> get products => _products;
   List<Product> get activeProducts => _products.where((p) => p.active).toList();
@@ -25,6 +27,7 @@ class AppProvider extends ChangeNotifier {
   Map<int, double> get pendingPurchasePrice => _pendingPurchasePrice;
   Map<int, double> get pendingSellPrice => _pendingSellPrice;
   Map<int, int> get pendingSalesQty => _pendingSalesQty;
+  List<HouseholdExpense> get pendingExpenses => List.unmodifiable(_pendingExpenses);
 
   Future<void> loadProducts() async {
     _products = await DbService.getProducts();
@@ -71,7 +74,6 @@ class AppProvider extends ChangeNotifier {
     await loadProducts();
     _currentEntry = await DbService.getOrCreateDayEntry(date, activeProducts);
 
-    // Pre-fill pending state from existing entry
     _pendingPurchaseQty = {};
     _pendingPurchasePrice = {};
     _pendingSellPrice = {};
@@ -93,45 +95,63 @@ class AppProvider extends ChangeNotifier {
       _pendingSalesQty[p.id!] ??= 0;
     }
 
+    // Load existing expenses for this day
+    _pendingExpenses = List.from(_currentEntry!.expenses);
+
     notifyListeners();
   }
 
-  void setPurchaseQty(int productId, int qty) {
-    _pendingPurchaseQty[productId] = qty;
+  void setPurchaseQty(int productId, int qty) => _pendingPurchaseQty[productId] = qty;
+  void setPurchasePrice(int productId, double price) => _pendingPurchasePrice[productId] = price;
+  void setSellPrice(int productId, double price) => _pendingSellPrice[productId] = price;
+  void setSalesQty(int productId, int qty) => _pendingSalesQty[productId] = qty;
+
+  // ─── Expense management ──────────────────────────
+  void addExpense(String description, double amount) {
+    _pendingExpenses.add(HouseholdExpense(
+      dayEntryId: _currentEntry!.id!,
+      description: description,
+      amount: amount,
+    ));
+    notifyListeners();
   }
 
-  void setPurchasePrice(int productId, double price) {
-    _pendingPurchasePrice[productId] = price;
+  void removeExpense(int index) {
+    _pendingExpenses.removeAt(index);
+    notifyListeners();
   }
 
-  void setSellPrice(int productId, double price) {
-    _pendingSellPrice[productId] = price;
+  void updateExpense(int index, String description, double amount) {
+    _pendingExpenses[index] = HouseholdExpense(
+      id: _pendingExpenses[index].id,
+      dayEntryId: _currentEntry!.id!,
+      description: description,
+      amount: amount,
+    );
+    notifyListeners();
   }
 
-  void setSalesQty(int productId, int qty) {
-    _pendingSalesQty[productId] = qty;
+  Future<void> saveExpenses() async {
+    await DbService.replaceExpenses(_currentEntry!.id!, _pendingExpenses);
+    _currentEntry = _currentEntry!.copyWith(expenses: List.from(_pendingExpenses));
+    notifyListeners();
   }
 
+  // ─── Step saves ──────────────────────────────────
   Future<void> savePurchases() async {
     final items = activeProducts.map((p) => PurchaseItem(
           productId: p.id!,
           qty: _pendingPurchaseQty[p.id] ?? 0,
           price: _pendingPurchasePrice[p.id] ?? p.buyPrice,
         )).toList();
-
     await DbService.savePurchases(_currentEntry!.id!, items);
-
-    // Update product buy prices
     for (final p in activeProducts) {
       final qty = _pendingPurchaseQty[p.id] ?? 0;
       if (qty > 0) {
         final newPrice = _pendingPurchasePrice[p.id] ?? p.buyPrice;
-        if (newPrice != p.buyPrice) {
-          await updateProduct(p.copyWith(buyPrice: newPrice));
-        }
+        if (newPrice != p.buyPrice) await updateProduct(p.copyWith(buyPrice: newPrice));
       }
     }
-
     _currentEntry = _currentEntry!.copyWith(purchases: items);
     notifyListeners();
   }
@@ -139,9 +159,7 @@ class AppProvider extends ChangeNotifier {
   Future<void> saveSellPrices() async {
     for (final p in activeProducts) {
       final newPrice = _pendingSellPrice[p.id] ?? p.sellPrice;
-      if (newPrice != p.sellPrice) {
-        await updateProduct(p.copyWith(sellPrice: newPrice));
-      }
+      if (newPrice != p.sellPrice) await updateProduct(p.copyWith(sellPrice: newPrice));
     }
     notifyListeners();
   }
@@ -165,13 +183,22 @@ class AppProvider extends ChangeNotifier {
       revenue += sold * sellPrice;
       profit += sold * (sellPrice - buyPrice);
     }
-    await DbService.completeDayEntry(_currentEntry!.id!, revenue, profit);
-    _currentEntry = _currentEntry!.copyWith(complete: true, totalRevenue: revenue, totalProfit: profit);
+    final expenses = totalDailyExpenses;
+    final netProfit = profit - expenses;
+
+    await DbService.completeDayEntry(_currentEntry!.id!, revenue, profit, expenses, netProfit);
+    _currentEntry = _currentEntry!.copyWith(
+      complete: true,
+      totalRevenue: revenue,
+      totalProfit: profit,
+      totalExpenses: expenses,
+      netProfit: netProfit,
+    );
     await loadMonthEntries(_focusedMonth);
     notifyListeners();
   }
 
-  // ── Summary helpers ──────────────────────────────────
+  // ─── Computed helpers ────────────────────────────
   int getOpeningStock(int productId) => _currentEntry?.openingStock[productId] ?? 0;
 
   int getAvailableStock(int productId) {
@@ -201,13 +228,22 @@ class AppProvider extends ChangeNotifier {
     return total;
   }
 
+  double get totalDailyExpenses =>
+      _pendingExpenses.fold(0.0, (sum, e) => sum + e.amount);
+
+  double get dailyNetProfit => dailyProfit - totalDailyExpenses;
+
   double get monthlyRevenue => _monthEntries.fold(0, (s, e) => s + e.totalRevenue);
   double get monthlyProfit => _monthEntries.fold(0, (s, e) => s + e.totalProfit);
+  double get monthlyExpenses => _monthEntries.fold(0, (s, e) => s + e.totalExpenses);
+  double get monthlyNetProfit => _monthEntries.fold(0, (s, e) => s + e.netProfit);
   int get completedDaysCount => _monthEntries.where((e) => e.complete).length;
 
   String? get bestDay {
     if (_monthEntries.isEmpty) return null;
-    final best = _monthEntries.reduce((a, b) => a.totalRevenue > b.totalRevenue ? a : b);
-    return best.totalRevenue > 0 ? 'Day ${best.date.day}' : null;
+    final completed = _monthEntries.where((e) => e.complete).toList();
+    if (completed.isEmpty) return null;
+    final best = completed.reduce((a, b) => a.netProfit > b.netProfit ? a : b);
+    return best.netProfit > 0 ? 'Day ${best.date.day}' : null;
   }
 }
