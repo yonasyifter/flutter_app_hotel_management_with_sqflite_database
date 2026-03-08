@@ -114,7 +114,7 @@ class DbService {
   static Future<int> registerUser(String email, String password) async {
     final database = await db;
     final count = Sqflite.firstIntValue(await database.rawQuery('SELECT COUNT(*) FROM users')) ?? 0;
-    if (count >= 2) return -1; // Only allow 2 users
+    if (count >= 2) return -1;
     return database.insert('users', {'email': email, 'password': password});
   }
 
@@ -154,13 +154,24 @@ class DbService {
   }
 
   // ─── DAY ENTRIES ─────────────────────────────────
+
   static Future<DayEntry?> getDayEntry(DateTime date) async {
     final database = await db;
-    final dateStr = _dateStr(date);
-    final rows = await database.query('day_entries', where: 'date = ?', whereArgs: [dateStr]);
+    final rows = await database.query('day_entries', where: 'date = ?', whereArgs: [_dateStr(date)]);
     if (rows.isEmpty) return null;
+    return _hydrateDayEntry(database, rows.first);
+  }
 
-    final entry = DayEntry.fromMap(rows.first);
+  static Future<DayEntry?> getDayEntryById(int id) async {
+    final database = await db;
+    final rows = await database.query('day_entries', where: 'id = ?', whereArgs: [id]);
+    if (rows.isEmpty) return null;
+    return _hydrateDayEntry(database, rows.first);
+  }
+
+  static Future<DayEntry> _hydrateDayEntry(
+      Database database, Map<String, dynamic> row) async {
+    final entry = DayEntry.fromMap(row);
     final id = entry.id!;
 
     final osRows = await database.query('opening_stock', where: 'day_entry_id = ?', whereArgs: [id]);
@@ -186,29 +197,35 @@ class DbService {
 
     final openingStockMap = <int, int>{};
     for (final p in products) {
-      openingStockMap[p.id!] = await _getClosingStockBefore(p.id!, date) ?? p.openingStock;
+      openingStockMap[p.id!] = await _computeClosingStockBefore(p.id!, date) ?? p.openingStock;
     }
 
     final database = await db;
     final id = await database.insert('day_entries', {
-      'date': _dateStr(date), 'complete': 0,
-      'total_revenue': 0, 'total_profit': 0, 'total_expenses': 0, 'net_profit': 0,
+      'date': _dateStr(date),
+      'complete': 0,
+      'total_revenue': 0,
+      'total_profit': 0,
+      'total_expenses': 0,
+      'net_profit': 0,
     });
 
     for (final entry in openingStockMap.entries) {
       await database.insert('opening_stock', {
-        'day_entry_id': id, 'product_id': entry.key, 'qty': entry.value
+        'day_entry_id': id,
+        'product_id': entry.key,
+        'qty': entry.value,
       });
     }
 
     return DayEntry(id: id, date: date, openingStock: openingStockMap);
   }
 
-  static Future<int?> _getClosingStockBefore(int productId, DateTime date) async {
+  static Future<int?> _computeClosingStockBefore(int productId, DateTime date) async {
     final database = await db;
     final rows = await database.rawQuery('''
       SELECT 
-        os.qty as opening,
+        COALESCE(os.qty, 0) as opening,
         COALESCE(p.qty, 0) as purchased,
         COALESCE(s.qty_sold, 0) as sold
       FROM day_entries de
@@ -228,6 +245,109 @@ class DbService {
     return (opening + purchased - sold).clamp(0, 99999);
   }
 
+  /// Compute closing stock for a product from a specific completed day entry.
+  static Future<int> computeClosingStockForDay(int dayEntryId, int productId) async {
+    final database = await db;
+
+    final osRows = await database.query('opening_stock',
+        where: 'day_entry_id = ? AND product_id = ?', whereArgs: [dayEntryId, productId]);
+    final opening = osRows.isNotEmpty ? (osRows.first['qty'] as int? ?? 0) : 0;
+
+    final purRows = await database.query('purchases',
+        where: 'day_entry_id = ? AND product_id = ?', whereArgs: [dayEntryId, productId]);
+    final purchased = purRows.isNotEmpty ? (purRows.first['qty'] as int? ?? 0) : 0;
+
+    final saleRows = await database.query('sales',
+        where: 'day_entry_id = ? AND product_id = ?', whereArgs: [dayEntryId, productId]);
+    final sold = saleRows.isNotEmpty ? (saleRows.first['qty_sold'] as int? ?? 0) : 0;
+
+    return (opening + purchased - sold).clamp(0, 99999);
+  }
+
+  /// Get the current closing stock for a product (based on most recent completed day).
+  /// Returns the product's base openingStock if no completed days exist (returns -1 sentinel).
+  static Future<int> getCurrentClosingStock(int productId) async {
+    final database = await db;
+    final rows = await database.rawQuery('''
+      SELECT 
+        de.id as entry_id,
+        COALESCE(os.qty, 0) as opening,
+        COALESCE(p.qty, 0) as purchased,
+        COALESCE(s.qty_sold, 0) as sold
+      FROM day_entries de
+      LEFT JOIN opening_stock os ON os.day_entry_id = de.id AND os.product_id = ?
+      LEFT JOIN purchases p ON p.day_entry_id = de.id AND p.product_id = ?
+      LEFT JOIN sales s ON s.day_entry_id = de.id AND s.product_id = ?
+      WHERE de.complete = 1
+      ORDER BY de.date DESC
+      LIMIT 1
+    ''', [productId, productId, productId]);
+
+    if (rows.isEmpty) return -1; // sentinel: no history yet
+    final row = rows.first;
+    final opening = (row['opening'] as int?) ?? 0;
+    final purchased = (row['purchased'] as int?) ?? 0;
+    final sold = (row['sold'] as int?) ?? 0;
+    return (opening + purchased - sold).clamp(0, 99999);
+  }
+
+  /// After a day is completed/re-completed, cascade opening stock updates
+  /// forward to all subsequent day entries in the database.
+  static Future<void> cascadeOpeningStockForward(int fromDayEntryId, String fromDate) async {
+    final database = await db;
+
+    // All day entries strictly after the edited day, oldest first
+    final laterRows = await database.query(
+      'day_entries',
+      where: 'date > ?',
+      whereArgs: [fromDate],
+      orderBy: 'date ASC',
+    );
+    if (laterRows.isEmpty) return;
+
+    // Collect all product IDs that appear in the edited day
+    final productIdSet = <int>{};
+    final osRows = await database.rawQuery(
+        'SELECT DISTINCT product_id FROM opening_stock WHERE day_entry_id = ?', [fromDayEntryId]);
+    for (final r in osRows) productIdSet.add(r['product_id'] as int);
+    final purRows = await database.rawQuery(
+        'SELECT DISTINCT product_id FROM purchases WHERE day_entry_id = ?', [fromDayEntryId]);
+    for (final r in purRows) productIdSet.add(r['product_id'] as int);
+    final salesRows = await database.rawQuery(
+        'SELECT DISTINCT product_id FROM sales WHERE day_entry_id = ?', [fromDayEntryId]);
+    for (final r in salesRows) productIdSet.add(r['product_id'] as int);
+
+    int prevDayEntryId = fromDayEntryId;
+
+    for (final row in laterRows) {
+      final thisDayEntryId = row['id'] as int;
+
+      for (final productId in productIdSet) {
+        final newOpening = await computeClosingStockForDay(prevDayEntryId, productId);
+
+        final existing = await database.query('opening_stock',
+            where: 'day_entry_id = ? AND product_id = ?',
+            whereArgs: [thisDayEntryId, productId]);
+        if (existing.isEmpty) {
+          await database.insert('opening_stock', {
+            'day_entry_id': thisDayEntryId,
+            'product_id': productId,
+            'qty': newOpening,
+          });
+        } else {
+          await database.update(
+            'opening_stock',
+            {'qty': newOpening},
+            where: 'day_entry_id = ? AND product_id = ?',
+            whereArgs: [thisDayEntryId, productId],
+          );
+        }
+      }
+
+      prevDayEntryId = thisDayEntryId;
+    }
+  }
+
   static Future<void> savePurchases(int dayEntryId, List<PurchaseItem> items) async {
     final database = await db;
     await database.delete('purchases', where: 'day_entry_id = ?', whereArgs: [dayEntryId]);
@@ -244,7 +364,6 @@ class DbService {
     }
   }
 
-  // ─── HOUSEHOLD EXPENSES ──────────────────────────
   static Future<void> replaceExpenses(int dayEntryId, List<HouseholdExpense> items) async {
     final database = await db;
     await database.delete('household_expenses',
@@ -270,6 +389,7 @@ class DbService {
     }, where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Light-weight month summary (no sub-tables) — used for calendar + monthly totals.
   static Future<List<DayEntry>> getMonthEntries(int year, int month) async {
     final database = await db;
     final from = '$year-${month.toString().padLeft(2, '0')}-01';
@@ -277,6 +397,20 @@ class DbService {
     final rows = await database.query('day_entries',
         where: 'date >= ? AND date <= ?', whereArgs: [from, to]);
     return rows.map((r) => DayEntry.fromMap(r)).toList();
+  }
+
+  /// Full month entries with sub-tables — used for the home screen daily summary table.
+  static Future<List<DayEntry>> getFullMonthEntries(int year, int month) async {
+    final database = await db;
+    final from = '$year-${month.toString().padLeft(2, '0')}-01';
+    final to = '$year-${month.toString().padLeft(2, '0')}-31';
+    final rows = await database.query('day_entries',
+        where: 'date >= ? AND date <= ?', whereArgs: [from, to]);
+    final entries = <DayEntry>[];
+    for (final row in rows) {
+      entries.add(await _hydrateDayEntry(database, row));
+    }
+    return entries;
   }
 
   static String _dateStr(DateTime date) =>

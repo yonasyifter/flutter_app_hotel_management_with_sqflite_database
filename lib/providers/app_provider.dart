@@ -6,8 +6,10 @@ import '../services/db_service.dart';
 
 class AppProvider extends ChangeNotifier {
   List<Product> _products = [];
-  List<DayEntry> _monthEntries = [];
+  List<DayEntry> _monthEntries = []; // light-weight (no sub-tables)
+  List<DayEntry> _fullMonthEntries = []; // full (with sub-tables, for home screen)
   DayEntry? _currentEntry;
+
   DateTime _focusedMonth = DateTime.now();
 
   // Per-day flow state
@@ -17,9 +19,13 @@ class AppProvider extends ChangeNotifier {
   Map<int, int> _pendingSalesQty = {};
   List<HouseholdExpense> _pendingExpenses = [];
 
+  // Closing stock cache for product setup screen
+  Map<int, int> _closingStockCache = {};
+
   List<Product> get products => _products;
   List<Product> get activeProducts => _products.where((p) => p.active).toList();
   List<DayEntry> get monthEntries => _monthEntries;
+  List<DayEntry> get fullMonthEntries => _fullMonthEntries;
   DayEntry? get currentEntry => _currentEntry;
   DateTime get focusedMonth => _focusedMonth;
 
@@ -56,13 +62,46 @@ class AppProvider extends ChangeNotifier {
 
   Future<void> loadMonthEntries(DateTime month) async {
     _focusedMonth = month;
+    // Load light-weight entries for calendar + monthly totals
     _monthEntries = await DbService.getMonthEntries(month.year, month.month);
+    // Load full entries (with sub-tables) for the home screen daily summary
+    _fullMonthEntries = await DbService.getFullMonthEntries(month.year, month.month);
     notifyListeners();
+  }
+
+  /// Load closing stock for all active products — call this when entering the product setup screen.
+  Future<void> loadClosingStockCache() async {
+    _closingStockCache = {};
+    for (final p in activeProducts) {
+      _closingStockCache[p.id!] = await DbService.getCurrentClosingStock(p.id!);
+    }
+    notifyListeners();
+  }
+
+  /// Returns current stock for a product from the cache, falling back to base opening stock if no history.
+  int getProductCurrentStock(int productId) {
+    final cached = _closingStockCache[productId];
+    if (cached == null || cached == -1) {
+      final product = _products.firstWhere((p) => p.id == productId, orElse: () => Product(name: '', buyPrice: 0, sellPrice: 0));
+      return product.openingStock;
+    }
+    return cached;
   }
 
   DayEntry? getEntryForDay(int day) {
     try {
       return _monthEntries.firstWhere(
+        (e) => e.date.day == day && e.date.month == _focusedMonth.month,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Get the full hydrated entry for a specific day (for home screen daily summary).
+  DayEntry? getFullEntryForDay(int day) {
+    try {
+      return _fullMonthEntries.firstWhere(
         (e) => e.date.day == day && e.date.month == _focusedMonth.month,
       );
     } catch (_) {
@@ -95,9 +134,7 @@ class AppProvider extends ChangeNotifier {
       _pendingSalesQty[p.id!] ??= 0;
     }
 
-    // Load existing expenses for this day
     _pendingExpenses = List.from(_currentEntry!.expenses);
-
     notifyListeners();
   }
 
@@ -186,14 +223,25 @@ class AppProvider extends ChangeNotifier {
     final expenses = totalDailyExpenses;
     final netProfit = profit - expenses;
 
-    await DbService.completeDayEntry(_currentEntry!.id!, revenue, profit, expenses, netProfit);
-    _currentEntry = _currentEntry!.copyWith(
+    final entry = _currentEntry!;
+    final dateStr = entry.date.year.toString() +
+        '-' + entry.date.month.toString().padLeft(2, '0') +
+        '-' + entry.date.day.toString().padLeft(2, '0');
+
+    // Mark the day complete and store totals
+    await DbService.completeDayEntry(entry.id!, revenue, profit, expenses, netProfit);
+
+    // *** DYNAMIC CASCADE: propagate updated closing stock forward to all later days ***
+    await DbService.cascadeOpeningStockForward(entry.id!, dateStr);
+
+    _currentEntry = entry.copyWith(
       complete: true,
       totalRevenue: revenue,
       totalProfit: profit,
       totalExpenses: expenses,
       netProfit: netProfit,
     );
+
     await loadMonthEntries(_focusedMonth);
     notifyListeners();
   }
@@ -205,6 +253,13 @@ class AppProvider extends ChangeNotifier {
     final opening = getOpeningStock(productId);
     final bought = _pendingPurchaseQty[productId] ?? 0;
     return opening + bought;
+  }
+
+  int getClosingStock(int productId) {
+    final opening = getOpeningStock(productId);
+    final bought = _pendingPurchaseQty[productId] ?? 0;
+    final sold = _pendingSalesQty[productId] ?? 0;
+    return (opening + bought - sold).clamp(0, 9999);
   }
 
   double get dailyRevenue {

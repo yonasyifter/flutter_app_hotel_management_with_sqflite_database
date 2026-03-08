@@ -10,8 +10,8 @@ class AppStrings {
   }
 
   // App
-  String get appNamePart1    => isAmharic ? "ግሮሰሪ "                 : "Grocery";
-  String get appNamePart2    => isAmharic ? " ስቶክ"                  : " Stock";
+  String get appNamePart1    => isAmharic ? "ስሞኦን "                 : "Simon";
+  String get appNamePart2    => isAmharic ? " ግሮሰሪ"                  : " Grocery";
 
   // Language toggle
   String get langAmharic     => "አማርኛ";
@@ -149,7 +149,7 @@ class AppStrings {
   // Login & Signup
   String get login           => isAmharic ? "ግባ"                   : "Login";
   String get signUp          => isAmharic ? "ተመዝገብ"                : "Sign Up";
-  String get email           => isAmharic ? "ኢሜይል"                 : "Email";
+  String get email           => isAmharic ? "መለያ"                 : "Username";
   String get password        => isAmharic ? "የይለፍ ቃል"              : "Password";
   String get confirmPassword => isAmharic ? "የይለፍ ቃል አረጋግጥ"       : "Confirm Password";
   String get dontHaveAccount => isAmharic ? "መለያ የለዎትም? ተመዝገብ"    : "Don't have an account? Sign Up";

@@ -1,12 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 import '../providers/app_provider.dart';
 import '../providers/language_provider.dart';
-import '../l10n/strings.dart';
 import '../theme.dart';
-import '../widgets/shared_widgets.dart';
 import 'product_setup_screen.dart';
 import 'day_flow/purchases_screen.dart';
 import 'login_screen.dart';
@@ -19,6 +18,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   DateTime _focusedDay = DateTime.now();
+  DateTime? _unlockedDay;
+  Timer? _unlockTimer;
 
   @override
   void initState() {
@@ -30,6 +31,128 @@ class _HomeScreenState extends State<HomeScreen> {
         if (provider.products.isEmpty) _showSetupModal();
       });
     });
+  }
+
+  @override
+  void dispose() {
+    _unlockTimer?.cancel();
+    super.dispose();
+  }
+
+  // ── Date helpers ──────────────────────────────────────
+  bool _isToday(DateTime day) {
+    final now = DateTime.now();
+    return day.year == now.year && day.month == now.month && day.day == now.day;
+  }
+
+  bool _isYesterday(DateTime day) {
+    final yesterday = DateTime.now().subtract(const Duration(days: 1));
+    return day.year == yesterday.year &&
+        day.month == yesterday.month &&
+        day.day == yesterday.day;
+  }
+
+  bool _isAllowedDay(DateTime day) => _isToday(day) || _isYesterday(day);
+
+  bool _isUnlocked(DateTime day) =>
+      _unlockedDay != null &&
+      day.year == _unlockedDay!.year &&
+      day.month == _unlockedDay!.month &&
+      day.day == _unlockedDay!.day;
+
+  bool _isFuture(DateTime day) => day.isAfter(DateTime.now());
+
+  // ── Unlock a day for 5 minutes ────────────────────────
+  void _unlockDay(DateTime day) {
+    _unlockTimer?.cancel();
+    setState(() => _unlockedDay = day);
+    _unlockTimer = Timer(const Duration(minutes: 5), () {
+      if (mounted) setState(() => _unlockedDay = null);
+    });
+  }
+
+  // ── Show countdown dialog then unlock ─────────────────
+  void _showCountdownAndUnlock(DateTime day) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _CountdownDialog(
+        onComplete: () {
+          _unlockDay(day);
+          final provider = context.read<AppProvider>();
+          _openDay(context, provider, day);
+        },
+      ),
+    );
+  }
+
+  // ── Restriction warning dialog ────────────────────────
+  void _showRestrictedDialog(DateTime day) {
+    final bool isFuture = _isFuture(day);
+    final String formattedDate = DateFormat('MMMM d, yyyy').format(day);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.paper,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(children: [
+          Icon(
+            isFuture ? Icons.update_rounded : Icons.history_rounded,
+            color: AppTheme.red,
+            size: 22,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isFuture ? 'Future Date' : 'Past Date',
+            style: AppTheme.serifAmharic(
+                fontSize: 18, fontWeight: FontWeight.w700),
+          ),
+        ]),
+        content: Text(
+          isFuture
+              ? 'You are trying to modify future data for\n$formattedDate.\n\nDo you still want to proceed?'
+              : 'You are trying to modify past data for\n$formattedDate.\n\nDo you still want to proceed?',
+          style: AppTheme.sansAmharic(fontSize: 13, color: AppTheme.brown),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel',
+                style:
+                    AppTheme.sansAmharic(fontSize: 14, color: AppTheme.brown)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.red,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showCountdownAndUnlock(day);
+            },
+            child: Text(
+              'Yes, Proceed',
+              style: AppTheme.sansAmharic(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.cream),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Day tap handler ───────────────────────────────────
+  void _handleDayTap(
+      BuildContext context, AppProvider provider, DateTime day) {
+    if (_isAllowedDay(day) || _isUnlocked(day)) {
+      _openDay(context, provider, day);
+    } else {
+      _showRestrictedDialog(day);
+    }
   }
 
   void _showSetupModal() {
@@ -47,27 +170,35 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('${s.welcomeTitle} 🛒',
-                style: AppTheme.serifAmharic(fontSize: 22, fontWeight: FontWeight.w700)),
+                style: AppTheme.serifAmharic(
+                    fontSize: 22, fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             Text(s.welcomeBody,
                 style: AppTheme.sansAmharic(
-                    fontSize: 13, color: AppTheme.brown, fontStyle: FontStyle.italic)),
+                    fontSize: 13,
+                    color: AppTheme.brown,
+                    fontStyle: FontStyle.italic)),
             const SizedBox(height: 24),
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(context);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const ProductSetupScreen()));
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ProductSetupScreen()));
               },
               child: Text(s.setupProducts,
                   style: AppTheme.sansAmharic(
-                      fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.cream)),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.cream)),
             ),
             const SizedBox(height: 10),
             OutlinedButton(
               onPressed: () => Navigator.pop(context),
               child: Text(s.doLater,
-                  style: AppTheme.sansAmharic(fontSize: 15, color: AppTheme.ink)),
+                  style:
+                      AppTheme.sansAmharic(fontSize: 15, color: AppTheme.ink)),
             ),
             SizedBox(height: MediaQuery.of(context).viewInsets.bottom),
           ],
@@ -93,7 +224,8 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(l.s.selectLanguage,
-                    style: AppTheme.serifAmharic(fontSize: 20, fontWeight: FontWeight.w700)),
+                    style: AppTheme.serifAmharic(
+                        fontSize: 20, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 20),
                 _LangOption(
                   flagText: 'ET',
@@ -131,9 +263,12 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.paper,
         title: Text(s.logout, style: AppTheme.serifAmharic(fontSize: 20)),
-        content: Text(lang.isAmharic ? 'እርግጠኛ ነዎት መውጣት ይፈልጋሉ?' : 'Are you sure you want to logout?'),
+        content: Text(lang.isAmharic
+            ? 'እርግጠኛ ነዎት መውጣት ይፈልጋሉ?'
+            : 'Are you sure you want to logout?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: Text(s.cancel)),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -143,7 +278,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 (route) => false,
               );
             },
-            child: Text(s.logout, style: const TextStyle(color: AppTheme.red)),
+            child:
+                Text(s.logout, style: const TextStyle(color: AppTheme.red)),
           ),
         ],
       ),
@@ -163,26 +299,32 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: Row(children: [
                   Text(s.appNamePart1,
                       style: AppTheme.serifAmharic(
-                          fontSize: 22, fontWeight: FontWeight.w900, color: AppTheme.cream)),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.cream)),
                   Text(s.appNamePart2,
                       style: AppTheme.serifAmharic(
-                          fontSize: 22, fontWeight: FontWeight.w900, color: AppTheme.amberLight)),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.amberLight)),
                 ]),
                 actions: [
-                  // ── Language toggle pill ──────────────
                   GestureDetector(
                     onTap: _showLanguagePicker,
                     child: Container(
-                      margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                      margin: const EdgeInsets.symmetric(
+                          vertical: 10, horizontal: 4),
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       decoration: BoxDecoration(
-                        border: Border.all(color: AppTheme.amberLight.withOpacity(0.6)),
+                        border: Border.all(
+                            color: AppTheme.amberLight.withOpacity(0.6)),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.language, size: 13, color: AppTheme.amberLight),
+                          const Icon(Icons.language,
+                              size: 13, color: AppTheme.amberLight),
                           const SizedBox(width: 4),
                           Text(
                             lang.isAmharic ? 'አማርኛ' : 'EN',
@@ -198,8 +340,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   IconButton(
                     icon: const Icon(Icons.local_grocery_store_sharp),
                     tooltip: s.manageProducts,
-                    onPressed: () => Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const ProductSetupScreen()))
+                    onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const ProductSetupScreen()))
                         .then((_) => provider.loadMonthEntries(_focusedDay)),
                   ),
                   IconButton(
@@ -221,19 +365,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   headerStyle: HeaderStyle(
                     formatButtonVisible: false,
                     titleCentered: true,
-                    titleTextStyle:
-                        AppTheme.serifAmharic(fontSize: 17, fontWeight: FontWeight.w700),
-                    leftChevronIcon:
-                        const Icon(Icons.chevron_left, color: AppTheme.brown),
-                    rightChevronIcon:
-                        const Icon(Icons.chevron_right, color: AppTheme.brown),
-                    headerPadding: const EdgeInsets.symmetric(vertical: 12),
+                    titleTextStyle: AppTheme.serifAmharic(
+                        fontSize: 17, fontWeight: FontWeight.w700),
+                    leftChevronIcon: const Icon(Icons.chevron_left,
+                        color: AppTheme.brown),
+                    rightChevronIcon: const Icon(Icons.chevron_right,
+                        color: AppTheme.brown),
+                    headerPadding:
+                        const EdgeInsets.symmetric(vertical: 12),
                   ),
                   daysOfWeekStyle: DaysOfWeekStyle(
-                    weekdayStyle:
-                        AppTheme.sansAmharic(fontSize: 12, color: AppTheme.brown),
-                    weekendStyle:
-                        AppTheme.sansAmharic(fontSize: 12, color: AppTheme.brown),
+                    weekdayStyle: AppTheme.sansAmharic(
+                        fontSize: 12, color: AppTheme.brown),
+                    weekendStyle: AppTheme.sansAmharic(
+                        fontSize: 12, color: AppTheme.brown),
                   ),
                   calendarStyle: CalendarStyle(
                     defaultTextStyle: AppTheme.sansAmharic(fontSize: 14),
@@ -249,13 +394,76 @@ class _HomeScreenState extends State<HomeScreen> {
                         borderRadius: BorderRadius.circular(8)),
                     cellMargin: const EdgeInsets.all(4),
                     outsideDaysVisible: false,
+                    disabledTextStyle: AppTheme.sansAmharic(
+                        fontSize: 14,
+                        color: AppTheme.brown.withOpacity(0.3)),
                   ),
                   calendarBuilders: CalendarBuilders(
                     defaultBuilder: (ctx, day, _) {
                       final entry = provider.getEntryForDay(day.day);
+                      final isRestricted =
+                          !_isAllowedDay(day) && !_isUnlocked(day);
+
+                      // Locked / restricted day
+                      if (isRestricted) {
+                        return Container(
+                          margin: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('${day.day}',
+                                    style: AppTheme.sansAmharic(
+                                        fontSize: 13,
+                                        color: AppTheme.brown
+                                            .withOpacity(0.3))),
+                                Icon(Icons.lock_outline_rounded,
+                                    size: 8,
+                                    color:
+                                        AppTheme.brown.withOpacity(0.25)),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
+                      // Temporarily unlocked day
+                      if (_isUnlocked(day)) {
+                        return Container(
+                          margin: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: AppTheme.red.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: AppTheme.red.withOpacity(0.5),
+                                width: 1.5),
+                          ),
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('${day.day}',
+                                    style: AppTheme.sansAmharic(
+                                        fontSize: 13,
+                                        color: AppTheme.red)),
+                                Icon(Icons.lock_open_rounded,
+                                    size: 8,
+                                    color:
+                                        AppTheme.red.withOpacity(0.7)),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
                       if (entry == null) return null;
-                      final color =
-                          entry.complete ? AppTheme.greenLight : AppTheme.redLight;
+                      final color = entry.complete
+                          ? AppTheme.greenLight
+                          : AppTheme.redLight;
                       final bg = entry.complete
                           ? const Color(0xFFEDF7F2)
                           : const Color(0xFFFFF2EE);
@@ -270,10 +478,13 @@ class _HomeScreenState extends State<HomeScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text('${day.day}',
-                                  style: AppTheme.sansAmharic(fontSize: 13)),
+                                  style:
+                                      AppTheme.sansAmharic(fontSize: 13)),
                               Text(entry.complete ? 'X' : 'o',
                                   style: TextStyle(
-                                      fontSize: 10, color: color, height: 1.2)),
+                                      fontSize: 10,
+                                      color: color,
+                                      height: 1.2)),
                             ],
                           ),
                         ),
@@ -286,7 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                   onDaySelected: (selected, focused) {
                     setState(() => _focusedDay = focused);
-                    _openDay(context, provider, selected);
+                    _handleDayTap(context, provider, selected);
                   },
                 ),
               ),
@@ -322,13 +533,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         Expanded(
                             child: _SummaryItem(
                                 label: s.totalRevenue,
-                                value: s.formatCurrency(provider.monthlyRevenue))),
+                                value: s.formatCurrency(
+                                    provider.monthlyRevenue))),
                         const SizedBox(width: 12),
                         Expanded(
                             child: _SummaryItem(
                                 label: s.netProfit,
-                                value:
-                                    s.formatCurrency(provider.monthlyNetProfit))),
+                                value: s.formatCurrency(
+                                    provider.monthlyNetProfit))),
                       ]),
                       const SizedBox(height: 12),
                       Row(children: [
@@ -340,13 +552,109 @@ class _HomeScreenState extends State<HomeScreen> {
                         Expanded(
                             child: _SummaryItem(
                                 label: s.expensesLabel,
-                                value:
-                                    s.formatCurrency(provider.monthlyExpenses))),
+                                value: s.formatCurrency(
+                                    provider.monthlyExpenses))),
                       ]),
                     ]),
                   ),
                 ),
               ),
+
+              // ── Yesterday's Daily Summary ─────────────────
+              Builder(builder: (_) {
+                final yesterday = DateTime.now().subtract(const Duration(days: 1));
+                // Use fullMonthEntries which includes purchases/sales/openingStock sub-tables
+                final yesterdayEntry = provider.fullMonthEntries.where((e) =>
+                    e.date.year == yesterday.year &&
+                    e.date.month == yesterday.month &&
+                    e.date.day == yesterday.day).firstOrNull;
+
+                if (yesterdayEntry == null || !yesterdayEntry.complete) {
+                  return const SliverToBoxAdapter(child: SizedBox.shrink());
+                }
+
+                return SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Header
+                        Row(children: [
+                          Text(s.dailySummary,
+                              style: AppTheme.serifAmharic(
+                                  fontSize: 16, fontWeight: FontWeight.w700)),
+                          const Spacer(),
+                          Text(
+                            DateFormat('MMM d').format(yesterday),
+                            style: AppTheme.sansAmharic(
+                                fontSize: 12, color: AppTheme.brown),
+                          ),
+                        ]),
+                        const SizedBox(height: 10),
+
+                        // Stock table
+                        Card(
+                          margin: EdgeInsets.all(20.0).copyWith(bottom: 0),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                headingRowHeight: 34,
+                                dataRowMinHeight: 44,
+                                dataRowMaxHeight: 52,
+                                columnSpacing: 12,
+                                headingTextStyle: AppTheme.sansAmharic(
+                                    fontSize: 10,
+                                    color: AppTheme.brown,
+                                    letterSpacing: 0.5),
+                                dataTextStyle: AppTheme.sansAmharic(fontSize: 12),
+                                columns: [
+                                  DataColumn(label: Text(s.colProduct)),
+                                  DataColumn(label: Text(s.colOpen), numeric: true),
+                                  DataColumn(label: Text(s.colBought), numeric: true),
+                                  DataColumn(label: Text(s.colSold), numeric: true),
+                                  DataColumn(label: Text(s.colClose), numeric: true),
+                                  DataColumn(label: Text(s.colRevenue), numeric: true),
+                                ],
+                                rows: provider.activeProducts.map((p) {
+                                  final opening = yesterdayEntry.openingStock[p.id] ?? 0;
+                                  final bought = yesterdayEntry.purchases
+                                      .where((x) => x.productId == p.id)
+                                      .fold(0, (sum, x) => sum + x.qty);
+                                  final sold = yesterdayEntry.sales
+                                      .where((x) => x.productId == p.id)
+                                      .fold(0, (sum, x) => sum + x.qtySold);
+                                  final closing = (opening + bought - sold).clamp(0, 9999);
+                                  // Use current sell price for per-product revenue estimate
+                                  final sellPrice = p.sellPrice;
+                                  return DataRow(cells: [
+                                    DataCell(Text(p.name,
+                                        style: AppTheme.sansAmharic(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600))),
+                                    DataCell(Text('$opening')),
+                                    DataCell(Text('+$bought')),
+                                    DataCell(Text('$sold')),
+                                    DataCell(Text('$closing',
+                                        style: TextStyle(
+                                            color: closing <= 3
+                                                ? AppTheme.red
+                                                : AppTheme.ink))),
+                                    DataCell(Text(s.formatCurrency(sold * p.sellPrice))),
+                                  ]);
+                                }).toList(),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ),
+                  ),
+                );
+              }),
             ],
           );
         },
@@ -354,7 +662,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _openDay(BuildContext context, AppProvider provider, DateTime day) async {
+  void _openDay(
+      BuildContext context, AppProvider provider, DateTime day) async {
     if (provider.activeProducts.isEmpty) {
       _showSetupModal();
       return;
@@ -364,6 +673,109 @@ class _HomeScreenState extends State<HomeScreen> {
     Navigator.push(context,
             MaterialPageRoute(builder: (_) => PurchasesScreen(date: day)))
         .then((_) => provider.loadMonthEntries(_focusedDay));
+  }
+}
+
+// ── Self-contained countdown dialog using Timer.periodic ──────
+class _CountdownDialog extends StatefulWidget {
+  final VoidCallback onComplete;
+  const _CountdownDialog({required this.onComplete});
+
+  @override
+  State<_CountdownDialog> createState() => _CountdownDialogState();
+}
+
+class _CountdownDialogState extends State<_CountdownDialog> {
+  static const int _totalSeconds = 30;
+  int _secondsLeft = _totalSeconds;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Timer.periodic fires every second — no recursion, no chaining
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      if (_secondsLeft <= 1) {
+        t.cancel();
+        Navigator.of(context).pop();
+        widget.onComplete();
+      } else {
+        setState(() => _secondsLeft--);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppTheme.paper,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(children: [
+        const Icon(Icons.hourglass_top_rounded,
+            color: AppTheme.amber, size: 22),
+        const SizedBox(width: 8),
+        Text('Please Wait',
+            style: AppTheme.serifAmharic(
+                fontSize: 18, fontWeight: FontWeight.w700)),
+      ]),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'You are about to modify restricted data.\nPlease wait before proceeding.',
+            style: AppTheme.sansAmharic(fontSize: 13, color: AppTheme.brown),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 24),
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              SizedBox(
+                width: 72,
+                height: 72,
+                child: CircularProgressIndicator(
+                  value: _secondsLeft / _totalSeconds,
+                  strokeWidth: 5,
+                  backgroundColor: AppTheme.amber.withOpacity(0.2),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(AppTheme.amber),
+                ),
+              ),
+              Text(
+                '$_secondsLeft',
+                style: AppTheme.serifAmharic(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.ink),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'seconds remaining',
+            style: AppTheme.sansAmharic(
+                fontSize: 12, color: AppTheme.brown.withOpacity(0.7)),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text('Cancel',
+              style: AppTheme.sansAmharic(fontSize: 14, color: AppTheme.red)),
+        ),
+      ],
+    );
   }
 }
 
@@ -431,7 +843,8 @@ class _LangOption extends StatelessWidget {
                 Text(sublabel,
                     style: AppTheme.sansAmharic(
                         fontSize: 12,
-                        color: selected ? AppTheme.amberLight : AppTheme.brown)),
+                        color:
+                            selected ? AppTheme.amberLight : AppTheme.brown)),
               ],
             ),
           ),

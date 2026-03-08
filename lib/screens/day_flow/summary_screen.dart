@@ -46,6 +46,7 @@ class SummaryScreen extends StatelessWidget {
                       final bought = provider.pendingPurchaseQty[p.id] ?? 0;
                       final sold = provider.pendingSalesQty[p.id] ?? 0;
                       final closing = (opening + bought - sold).clamp(0, 9999);
+                      
                       final sellPrice = provider.pendingSellPrice[p.id] ?? p.sellPrice;
                       if (closing <= 3) warnings.add(s.lowStockMsg(p.name, closing));
                       return DataRow(cells: [

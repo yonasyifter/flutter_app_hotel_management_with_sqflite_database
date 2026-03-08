@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 import '../providers/language_provider.dart';
 import '../services/db_service.dart';
@@ -69,8 +70,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 Center(
                   child: Column(
                     children: [
-                      const Text('🛒', style: TextStyle(fontSize: 64)),
-                      const SizedBox(height: 16),
+                      Lottie.asset('lib/assets/lotties/bg.json', width: 250, height: 250),
+                      //const Text('', style: TextStyle(fontSize: 64)),
+                      //const SizedBox(height: 16),
                       Text(
                         '${s.appNamePart1}${s.appNamePart2}',
                         style: AppTheme.serifAmharic(

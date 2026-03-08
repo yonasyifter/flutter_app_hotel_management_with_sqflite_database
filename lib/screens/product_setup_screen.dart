@@ -8,8 +8,20 @@ import '../theme.dart';
 import '../widgets/shared_widgets.dart';
 
 
-class ProductSetupScreen extends StatelessWidget {
+class ProductSetupScreen extends StatefulWidget {
   const ProductSetupScreen({super.key});
+  @override
+  State<ProductSetupScreen> createState() => _ProductSetupScreenState();
+}
+
+class _ProductSetupScreenState extends State<ProductSetupScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AppProvider>().loadClosingStockCache();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -117,7 +129,7 @@ class _ProductTile extends StatelessWidget {
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   Text(
-                    s.openingStockLabel(product.openingStock),
+                    s.openingStockLabel(context.read<AppProvider>().getProductCurrentStock(product.id!)),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ],
@@ -185,7 +197,7 @@ class _AddProductSheet extends StatefulWidget {
 
 class _AddProductSheetState extends State<_AddProductSheet> {
   final _formKey = GlobalKey<FormState>();
-  late TextEditingController _nameCtrl, _buyCtrl, _sellCtrl, _stockCtrl;
+  late TextEditingController _nameCtrl, _buyCtrl, _sellCtrl;
 
   @override
   void initState() {
@@ -195,8 +207,6 @@ class _AddProductSheetState extends State<_AddProductSheet> {
         text: widget.existing?.buyPrice.toStringAsFixed(2) ?? '');
     _sellCtrl = TextEditingController(
         text: widget.existing?.sellPrice.toStringAsFixed(2) ?? '');
-    _stockCtrl = TextEditingController(
-        text: (widget.existing?.openingStock ?? 0).toString());
   }
 
   @override
@@ -259,12 +269,7 @@ class _AddProductSheetState extends State<_AddProductSheet> {
               ],
             ),
             const SizedBox(height: 12),
-            TextFormField(
-              controller: _stockCtrl,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(labelText: s.openingStockUnits),
-            ),
-            const SizedBox(height: 20),
+          
             ElevatedButton(
               onPressed: _save,
               child: Text(isEditing ? s.saveChanges : s.addProduct),
@@ -288,7 +293,6 @@ class _AddProductSheetState extends State<_AddProductSheet> {
       name: _nameCtrl.text.trim(),
       buyPrice: double.parse(_buyCtrl.text),
       sellPrice: double.parse(_sellCtrl.text),
-      openingStock: int.tryParse(_stockCtrl.text) ?? 0,
     );
     if (widget.existing != null) {
       provider.updateProduct(product);
@@ -303,7 +307,6 @@ class _AddProductSheetState extends State<_AddProductSheet> {
     _nameCtrl.dispose();
     _buyCtrl.dispose();
     _sellCtrl.dispose();
-    _stockCtrl.dispose();
     super.dispose();
   }
 }
